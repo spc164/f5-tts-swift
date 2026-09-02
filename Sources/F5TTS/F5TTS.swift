@@ -74,7 +74,7 @@ public class F5TTS: Module {
         case midpoint
         case rk4
     }
-    
+
     enum F5TTSError: Error {
         case unableToLoadModel
         case unableToLoadReferenceAudio
@@ -250,10 +250,21 @@ public class F5TTS: Module {
         sway: Double = -1.0,
         speed: Double = 1.0,
         seed: Int? = nil,
+        vocoderDirectoryURL: URL? = nil,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws -> MLXArray {
-        print("Loading Vocos model...")
-        let vocos = try await Vocos.fromPretrained(repoId: "lucasnewman/vocos-mel-24khz-mlx")
+        // Fork note (Voice Studio): load Vocos from a bundled local directory when one
+        // is supplied, so generation never has to reach the Hugging Face Hub over the
+        // network. Falls back to the original network-downloading path when no local
+        // directory is given, so existing callers are unaffected.
+        let vocos: Vocos
+        if let vocoderDirectoryURL {
+            print("Loading Vocos model from local bundle: \(vocoderDirectoryURL.path)")
+            vocos = try Vocos.fromPretrained(modelDirectoryURL: vocoderDirectoryURL)
+        } else {
+            print("Loading Vocos model...")
+            vocos = try await Vocos.fromPretrained(repoId: "lucasnewman/vocos-mel-24khz-mlx")
+        }
 
         // load the reference audio + text
 
