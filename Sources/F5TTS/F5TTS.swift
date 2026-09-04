@@ -318,7 +318,25 @@ public extension F5TTS {
 
     static func fromPretrained(modelDirectoryURL: URL) throws -> F5TTS {
         let modelURL = modelDirectoryURL.appendingPathComponent("model.safetensors")
-        let modelWeights = try loadArrays(url: modelURL)
+        let rawModelWeights = try loadArrays(url: modelURL)
+
+        // Some exported checkpoints (e.g. raw ema-pytorch EMA checkpoints) wrap every
+        // real parameter under an "ema_model." prefix and also include unrelated
+        // top-level bookkeeping keys ("step", "initted") that don't correspond to any
+        // module parameter. Strip the prefix and drop anything that isn't part of the
+        // EMA model weights so they line up with this module's own key paths
+        // (e.g. "transformer.xxx", not "ema_model.transformer.xxx").
+        var modelWeights = [String: MLXArray]()
+        let emaPrefix = "ema_model."
+        for (key, value) in rawModelWeights {
+            if key.hasPrefix(emaPrefix) {
+                modelWeights[String(key.dropFirst(emaPrefix.count))] = value
+            }
+        }
+        if modelWeights.isEmpty {
+            // Not an EMA-wrapped checkpoint after all -- use the weights as-is.
+            modelWeights = rawModelWeights
+        }
 
         // mel spec
 
@@ -359,7 +377,7 @@ public extension F5TTS {
                 melSpec: MelSpec(filterbank: filterbank),
                 vocabCharMap: vocab
             )
-            try predictor.update(parameters: ModuleParameters.unflattened(durationModelWeights), verify: [.all])
+            try predictor.update(parameters: ModuleParameters.unflattened(durationModelWeights), verify: [.noUnusedKeys])
 
             durationPredictor = predictor
         } catch {
@@ -383,7 +401,7 @@ public extension F5TTS {
             vocabCharMap: vocab,
             durationPredictor: durationPredictor
         )
-        try f5tts.update(parameters: ModuleParameters.unflattened(modelWeights), verify: [.all])
+        try f5tts.update(parameters: ModuleParameters.unflattened(modelWeights), verify: [.noUnusedKeys])
 
         return f5tts
     }
