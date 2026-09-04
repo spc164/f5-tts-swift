@@ -75,7 +75,7 @@ public class F5TTS: Module {
         case rk4
     }
 
-    enum F5TTSError: Error {
+    public enum F5TTSError: Error {
         case unableToLoadModel
         case unableToLoadReferenceAudio
         case unableToDetermineDuration
@@ -290,7 +290,7 @@ public class F5TTS: Module {
         let (outputAudio, _) = try self.sample(
             cond: normalizedAudio.expandedDimensions(axis: 0),
             text: [processedText],
-            duration: nil,
+            duration: duration.map { Int($0) },
             steps: steps,
             method: method,
             cfgStrength: cfg,
