@@ -316,6 +316,46 @@ public extension F5TTS {
         return try self.fromPretrained(modelDirectoryURL: modelDirectoryURL)
     }
 
+    /// Re-key checkpoint weights so paths through this port's generic `Sequential`
+    /// container (whose children live under a "layers" key) match a PyTorch
+    /// checkpoint's bare numeric `nn.Sequential` indices.
+    private static func remapSequentialKeys(_ weights: [String: MLXArray]) -> [String: MLXArray] {
+        var result = [String: MLXArray]()
+        let textBlocksRegex = try? NSRegularExpression(pattern: "\\.text_blocks\\.(\\d+)\\.")
+
+        for (key, value) in weights {
+            var newKey = key
+
+            // FeedForward.ff wraps [projectIn(Sequential[Linear, GELU]), Dropout, Linear].
+            // Index 0 (projectIn) is itself a nested Sequential; index 2 is a plain Linear.
+            newKey = newKey.replacingOccurrences(of: ".ff.ff.0.0.", with: ".ff.ff.layers.0.layers.0.")
+            newKey = newKey.replacingOccurrences(of: ".ff.ff.2.", with: ".ff.ff.layers.2.")
+
+            // ConvPositionEmbedding.conv1d wraps [Conv, Mish, Conv, Mish] -- only
+            // indices 0 and 2 carry weights (Mish has none).
+            newKey = newKey.replacingOccurrences(of: ".conv1d.0.", with: ".conv1d.layers.0.")
+            newKey = newKey.replacingOccurrences(of: ".conv1d.2.", with: ".conv1d.layers.2.")
+
+            // Attention.to_out wraps [Linear, Dropout] -- only index 0 carries weights.
+            newKey = newKey.replacingOccurrences(of: ".to_out.0.", with: ".to_out.layers.0.")
+
+            // TimestepEmbedding.time_mlp wraps [Linear, SiLU, Linear] -- indices 0 and 2
+            // carry weights.
+            newKey = newKey.replacingOccurrences(of: ".time_mlp.0.", with: ".time_mlp.layers.0.")
+            newKey = newKey.replacingOccurrences(of: ".time_mlp.2.", with: ".time_mlp.layers.2.")
+
+            // TextEmbedding.text_blocks wraps a variable-length list of ConvNeXtV2Block.
+            if let textBlocksRegex {
+                let range = NSRange(newKey.startIndex..., in: newKey)
+                newKey = textBlocksRegex.stringByReplacingMatches(
+                    in: newKey, range: range, withTemplate: ".text_blocks.layers.$1.")
+            }
+
+            result[newKey] = value
+        }
+        return result
+    }
+
     static func fromPretrained(modelDirectoryURL: URL) throws -> F5TTS {
         let modelURL = modelDirectoryURL.appendingPathComponent("model.safetensors")
         let rawModelWeights = try loadArrays(url: modelURL)
@@ -337,6 +377,14 @@ public extension F5TTS {
             // Not an EMA-wrapped checkpoint after all -- use the weights as-is.
             modelWeights = rawModelWeights
         }
+
+        // This Swift port builds every `nn.Sequential`-equivalent block using its own
+        // generic `Sequential` helper, whose layers are exposed under a "layers" key
+        // (via @ModuleInfo). The original PyTorch checkpoint has no such wrapper --
+        // `nn.Sequential` children are addressed directly by their bare numeric index
+        // (e.g. "ff.ff.0.weight"), not "ff.ff.layers.0.weight". Re-key the known
+        // Sequential-wrapped paths so they line up with this module's structure.
+        modelWeights = Self.remapSequentialKeys(modelWeights)
 
         // mel spec
 
